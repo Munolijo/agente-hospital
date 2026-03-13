@@ -1,0 +1,121 @@
+import os
+from uuid import uuid4
+from openai import OpenAI
+
+# Inicializar cliente de OpenAI usando la variable de entorno
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+
+def llamar_agente(prompt: str) -> str:
+    """
+    Llama al modelo de OpenAI usando la Responses API y devuelve solo el texto.
+    """
+    respuesta = client.responses.create(
+        model="gpt-4o-mini",  # puedes cambiar a otro modelo si quieres
+        input=prompt,
+    )
+    return respuesta.output_text.strip()
+
+
+def detectar_idioma_paciente(texto_paciente: str) -> str:
+    """
+    Devuelve el nombre del idioma en español (ej: 'inglés', 'francés', etc.).
+    """
+    prompt = (
+        "El siguiente texto lo ha dicho un paciente.\n"
+        "Tu tarea es solo detectar en qué idioma está escrito el texto.\n"
+        "Responde únicamente con el nombre del idioma en español (ejemplos: "
+        "\"inglés\", \"francés\", \"árabe\", \"ruso\", \"portugués\", \"chino\").\n"
+        "No añadas explicaciones.\n\n"
+        f"Texto del paciente:\n{texto_paciente}\n"
+    )
+    idioma = llamar_agente(prompt)
+    return idioma.strip()
+
+
+def traducir_paciente_a_espanol(texto_paciente: str, idioma_paciente: str) -> str:
+    """
+    Traduce el texto del paciente al español con enfoque clínico.
+    """
+    prompt = (
+        "Eres un traductor profesional.\n"
+        "Traduce el siguiente texto del PACIENTE al ESPAÑOL, manteniendo el "
+        "significado y los matices importantes.\n"
+        "No añadas explicaciones, ni comentarios, ni notas; responde solo "
+        "con la traducción.\n\n"
+        f"Texto del paciente ({idioma_paciente}):\n{texto_paciente}\n"
+    )
+    traduccion = llamar_agente(prompt)
+    return traduccion.strip()
+
+
+def traducir_sanitario_a_paciente(texto_sanitario: str, idioma_paciente: str) -> str:
+    """
+    Traduce del español al idioma del paciente.
+    """
+    prompt = (
+        "Eres un traductor profesional.\n"
+        "Traduce el siguiente texto del SANITARIO al idioma del PACIENTE, "
+        "manteniendo el significado y los matices importantes.\n"
+        "No añadas explicaciones, ni comentarios, ni notas; responde solo "
+        "con la traducción.\n\n"
+        f"Idioma del paciente: {idioma_paciente}\n\n"
+        f"Texto del sanitario (en ESPAÑOL):\n{texto_sanitario}\n"
+    )
+    traduccion = llamar_agente(prompt)
+    return traduccion.strip()
+
+
+def traducir_documento_generico(texto_documento: str, idioma_destino: str, origen: str) -> str:
+    """
+    Traduce documentos usando OpenAI. origen: 'paciente' o 'sanitario'.
+    - Si origen == 'paciente': siempre traduce al ESPAÑOL.
+    - Si origen == 'sanitario': traduce al idioma_destino (idioma del paciente).
+    """
+    if origen == "paciente":
+        prompt = f"""
+Eres un agente de traducción.
+TU ÚNICA TAREA es traducir el texto, sin explicaciones adicionales,
+sin comentarios legales, sin valoraciones, sin resúmenes y sin añadir información nueva.
+
+Traduce el siguiente DOCUMENTO entregado por el PACIENTE al ESPAÑOL.
+Devuelve únicamente la traducción, sin ningún texto extra.
+
+DOCUMENTO DEL PACIENTE:
+{texto_documento}
+"""
+    else:
+        prompt = f"""
+Eres un agente de traducción.
+TU ÚNICA TAREA es traducir el texto, sin explicaciones adicionales,
+sin comentarios legales, sin valoraciones, sin resúmenes y sin añadir información nueva.
+
+El siguiente texto es un DOCUMENTO del HOSPITAL para el PACIENTE, escrito en ESPAÑOL.
+Traduce TODO el contenido al idioma del paciente: {idioma_destino}.
+Devuelve únicamente la traducción, sin ningún texto extra.
+
+DOCUMENTO DEL HOSPITAL:
+{texto_documento}
+"""
+
+    traduccion = llamar_agente(prompt)
+    return traduccion.strip()
+
+
+def iniciar_conversacion(texto_original: str) -> dict:
+    """
+    Orquesta: detecta idioma, traduce al español y devuelve la estructura de la conversación.
+    """
+    id_conversacion = str(uuid4())
+
+    idioma_paciente = detectar_idioma_paciente(texto_original)
+    texto_traducido = traducir_paciente_a_espanol(texto_original, idioma_paciente)
+
+    return {
+        "id_conversacion": id_conversacion,
+        "rol": "paciente",
+        "idioma_paciente": idioma_paciente,
+        "texto_original": texto_original,
+        "texto_traducido": texto_traducido,
+    }

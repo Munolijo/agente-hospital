@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+
+# SQLite
+*.db
+
+# Node / React
+node_modules/
+dist/
+build/
+.env.local
