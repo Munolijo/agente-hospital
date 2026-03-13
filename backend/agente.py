@@ -2,20 +2,33 @@ import os
 from uuid import uuid4
 from openai import OpenAI
 
-# Inicializar cliente de OpenAI usando la variable de entorno
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Inicializar cliente usando la variable de entorno de Perplexity
+API_KEY = os.environ["PERPLEXITY_API_KEY"]
+
+client = OpenAI(
+    api_key=API_KEY,
+    base_url="https://api.perplexity.ai",
+)
 
 
 def llamar_agente(prompt: str) -> str:
     """
-    Llama al modelo de OpenAI usando la Responses API y devuelve solo el texto.
+    Llama al modelo de Perplexity (OpenAI-compatible) y devuelve solo el texto.
     """
-    respuesta = client.responses.create(
-        model="gpt-4o-mini",  # puedes cambiar a otro modelo si quieres
-        input=prompt,
+    respuesta = client.chat.completions.create(
+        model="sonar-pro",
+        messages=[
+            {
+                "role": "system",
+                "content": "Eres un agente de traducción para un hospital.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
     )
-    return respuesta.output_text.strip()
+    return respuesta.choices[0].message.content.strip()
 
 
 def detectar_idioma_paciente(texto_paciente: str) -> str:
@@ -67,9 +80,11 @@ def traducir_sanitario_a_paciente(texto_sanitario: str, idioma_paciente: str) ->
     return traduccion.strip()
 
 
-def traducir_documento_generico(texto_documento: str, idioma_destino: str, origen: str) -> str:
+def traducir_documento_generico(
+    texto_documento: str, idioma_destino: str, origen: str
+) -> str:
     """
-    Traduce documentos usando OpenAI. origen: 'paciente' o 'sanitario'.
+    Traduce documentos usando Perplexity. origen: 'paciente' o 'sanitario'.
     - Si origen == 'paciente': siempre traduce al ESPAÑOL.
     - Si origen == 'sanitario': traduce al idioma_destino (idioma del paciente).
     """
