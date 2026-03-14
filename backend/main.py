@@ -19,23 +19,21 @@ import pytesseract
 from sqlmodel import Session, select
 import httpx  # <- NUEVO
 
-# db.py
-from db import User as UserDB, create_db_and_tables, get_session
+# IMPORTS LOCALES como paquete backend
+from .db import User as UserDB, create_db_and_tables, get_session
 
-# IMPORTAMOS DESDE agente.py
-from agente import (
+from .agente import (
     detectar_idioma_paciente,
     traducir_paciente_a_espanol,
     iniciar_conversacion,  # si no lo usas, puedes quitarlo
+    traducir_sanitario_a_paciente,
 )
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-
 # ----------------------------------------------------------------------
 # CONFIGURACIÓN AUTH / JWT
 # ----------------------------------------------------------------------
-
 
 SECRET_KEY = "CAMBIA_ESTA_CLAVE_POR_UNA_LARGA_Y_SECRETA"
 ALGORITHM = "HS256"
@@ -44,11 +42,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 480
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
-
 # ----------------------------------------------------------------------
 # CONFIGURACIÓN FASTAPI
 # ----------------------------------------------------------------------
-
 
 app = FastAPI(
     title="Agente de Traducción Hospitalaria",
@@ -63,29 +59,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.on_event("startup")
 def on_startup():
     # Crear tablas si no existen (incluye User)
     create_db_and_tables()
 
-
 # ----------------------------------------------------------------------
 # MEMORIA DE CONVERSACIONES
 # ----------------------------------------------------------------------
 
-
 conversaciones: Dict[str, str] = {}  # id_conversacion -> idioma_paciente
-
 
 # ----------------------------------------------------------------------
 # MODELOS Pydantic (esquemas de API)
 # ----------------------------------------------------------------------
 
-
 class MensajeTexto(BaseModel):
     texto_original: str
-
 
 class RespuestaMensaje(BaseModel):
     id_conversacion: str
@@ -94,22 +84,18 @@ class RespuestaMensaje(BaseModel):
     texto_original: str
     texto_traducido: str
 
-
 class FinalizarRespuesta(BaseModel):
     id_conversacion: str
     estado: str
-
 
 class Token(BaseModel):
     access_token: str
     token_type: str
 
-
 class TokenData(BaseModel):
     username: str | None = None
     hospital_id: str | None = None
     role: str | None = None
-
 
 class User(BaseModel):
     id: int
@@ -118,13 +104,11 @@ class User(BaseModel):
     role: str
     activo: bool
 
-
 class UserCreate(BaseModel):
     username: str
     password: str
     hospital_id: str
     role: str
-
 
 class UserRead(BaseModel):
     id: int
@@ -133,24 +117,19 @@ class UserRead(BaseModel):
     role: str
     activo: bool
 
-
 # ----------------------------------------------------------------------
 # UTILIDADES AUTH / USERS (BD)
 # ----------------------------------------------------------------------
 
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
-
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
-
 def get_user_by_username(session: Session, username: str) -> Optional[UserDB]:
     statement = select(UserDB).where(UserDB.username == username)
     return session.exec(statement).first()
-
 
 def authenticate_user(
     session: Session, username: str, password: str
@@ -164,7 +143,6 @@ def authenticate_user(
         return None
     return user
 
-
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
     if expires_delta:
@@ -174,7 +152,6 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
-
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -207,17 +184,19 @@ async def get_current_user(
         raise HTTPException(status_code=400, detail="Usuario inactivo.")
     return user
 
-
 # ----------------------------------------------------------------------
 # ENDPOINTS AUTH
 # ----------------------------------------------------------------------
-
 
 @app.post("/auth/login", response_model=Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: Session = Depends(get_session),
 ):
+    # LOG PARA DEPURAR LO QUE LLEGA DEL FRONT
+    print("LOGIN DEBUG -> username recibido:", repr(form_data.username))
+    print("LOGIN DEBUG -> password recibido:", repr(form_data.password))
+
     user = authenticate_user(session, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
@@ -236,7 +215,6 @@ async def login_for_access_token(
     )
     return Token(access_token=access_token, token_type="bearer")
 
-
 @app.get("/auth/me", response_model=UserRead)
 async def read_users_me(current_user: UserDB = Depends(get_current_user)):
     return UserRead(
@@ -247,11 +225,9 @@ async def read_users_me(current_user: UserDB = Depends(get_current_user)):
         activo=current_user.activo,
     )
 
-
 # ----------------------------------------------------------------------
 # ENDPOINTS GESTIÓN DE USUARIOS (altas/bajas)
 # ----------------------------------------------------------------------
-
 
 @app.post("/users", response_model=UserRead)
 def create_user(
@@ -259,7 +235,6 @@ def create_user(
     session: Session = Depends(get_session),
     current_user: UserDB = Depends(get_current_user),
 ):
-    # Aquí podrías restringir a admin: if current_user.role != "admin": ...
     existing = get_user_by_username(session, user_in.username)
     if existing:
         raise HTTPException(
@@ -286,7 +261,6 @@ def create_user(
         activo=user_db.activo,
     )
 
-
 @app.get("/users", response_model=list[UserRead])
 def list_users(
     session: Session = Depends(get_session),
@@ -303,7 +277,6 @@ def list_users(
         )
         for u in users
     ]
-
 
 @app.patch("/users/{user_id}/activo", response_model=UserRead)
 def set_user_active(
@@ -327,28 +300,17 @@ def set_user_active(
         activo=user_db.activo,
     )
 
-
 # ----------------------------------------------------------------------
 # RESOLVER PRINCIPIO ACTIVO DESDE NOMBRE COMERCIAL (CIMA AEMPS)
 # ----------------------------------------------------------------------
 
-
 CIMA_BASE_URL = "https://cima.aemps.es/cima/rest/medicamentos"
 
-
 def resolver_principio_activo_desde_cima(nombre_comercial: str) -> Optional[str]:
-    """
-    Busca en la API CIMA (AEMPS) un medicamento por nombre comercial
-    y devuelve un string con los principios activos, o None si no encuentra.
-    """
-    params = {
-        "nombre": nombre_comercial,
-    }
-
+    params = {"nombre": nombre_comercial}
     try:
         response = httpx.get(CIMA_BASE_URL, params=params, timeout=5.0)
     except httpx.RequestError:
-        # Si la API no responde, no inventamos nada
         return None
 
     if response.status_code != 200:
@@ -359,15 +321,11 @@ def resolver_principio_activo_desde_cima(nombre_comercial: str) -> Optional[str]
     except ValueError:
         return None
 
-    # La API de CIMA devuelve una lista de medicamentos; cogemos el primero
     if not isinstance(data, list) or not data:
         return None
 
     med = data[0]
-
-    # En la guía de CIMA los principios activos aparecen en "pactivos" (lista).
     pactivos = med.get("pactivos") or med.get("principiosActivos")
-
     if not pactivos:
         return None
 
@@ -390,77 +348,51 @@ def resolver_principio_activo_desde_cima(nombre_comercial: str) -> Optional[str]
 
     return None
 
-
 def resolver_principio_activo(nombre_comercial: str) -> str:
-    """
-    Intenta resolver el principio activo:
-    1) Consultando CIMA.
-    2) Si no hay resultado, devuelve el nombre comercial tal cual,
-       sin traducir ni inventar nada.
-    """
     nombre_comercial = nombre_comercial.strip()
     if not nombre_comercial:
         return ""
-
     principio = resolver_principio_activo_desde_cima(nombre_comercial)
     if principio:
         return principio
-
-    # No hemos encontrado equivalencia fiable -> devolvemos el nombre original
     return nombre_comercial
-
 
 class MedicamentoEntrada(BaseModel):
     nombre_comercial: str
 
-
 class MedicamentoSalida(BaseModel):
     nombre_comercial: str
     principio_activo: str
-
 
 @app.post("/api/medicamentos/resolver", response_model=MedicamentoSalida)
 def resolver_medicamento(
     med: MedicamentoEntrada,
     current_user: UserDB = Depends(get_current_user),
 ):
-    """
-    Dado un nombre comercial (posible nombre en otro idioma),
-    devuelve el principio activo en español si se puede obtener desde CIMA.
-    Si no se puede obtener, devuelve el nombre tal y como lo dijo el paciente.
-    """
     principio = resolver_principio_activo(med.nombre_comercial)
     return MedicamentoSalida(
         nombre_comercial=med.nombre_comercial.strip(),
         principio_activo=principio,
     )
 
-
 # ----------------------------------------------------------------------
 # ENDPOINTS DE CONVERSACIÓN TEXTO (protegidos con auth)
 # ----------------------------------------------------------------------
-
 
 @app.post("/api/conversaciones/paciente/texto", response_model=RespuestaMensaje)
 def iniciar_conversacion_paciente_texto(
     msg: MensajeTexto,
     current_user: UserDB = Depends(get_current_user),
 ):
-    """
-    El PACIENTE inicia la conversación escribiendo.
-    Detecta idioma, lo fija para la conversación y traduce a ESPAÑOL.
-    """
     texto = msg.texto_original.strip()
     if not texto:
         raise HTTPException(
             status_code=400, detail="El texto_original no puede estar vacío."
         )
 
-    # Detectamos el idioma y traducimos al español
     idioma_paciente = detectar_idioma_paciente(texto)
     traduccion_es = traducir_paciente_a_espanol(texto, idioma_paciente)
 
-    # Creamos id de conversación y guardamos el idioma asociado
     id_conversacion = str(uuid.uuid4())
     conversaciones[id_conversacion] = idioma_paciente
 
@@ -472,7 +404,6 @@ def iniciar_conversacion_paciente_texto(
         texto_traducido=traduccion_es,
     )
 
-
 @app.post(
     "/api/conversaciones/{id_conversacion}/paciente/texto",
     response_model=RespuestaMensaje,
@@ -482,10 +413,6 @@ def turno_paciente_texto(
     msg: MensajeTexto,
     current_user: UserDB = Depends(get_current_user),
 ):
-    """
-    Turno de PACIENTE con texto dentro de una conversación ya iniciada.
-    Traduce SIEMPRE al ESPAÑOL.
-    """
     if id_conversacion not in conversaciones:
         raise HTTPException(status_code=404, detail="Conversación no encontrada.")
 
@@ -506,7 +433,6 @@ def turno_paciente_texto(
         texto_traducido=traduccion_es,
     )
 
-
 @app.post(
     "/api/conversaciones/{id_conversacion}/sanitario/texto",
     response_model=RespuestaMensaje,
@@ -516,10 +442,6 @@ def turno_sanitario_texto(
     msg: MensajeTexto,
     current_user: UserDB = Depends(get_current_user),
 ):
-    """
-    Turno de SANITARIO con texto dentro de una conversación.
-    Traduce del ESPAÑOL al idioma fijo del paciente.
-    """
     if id_conversacion not in conversaciones:
         raise HTTPException(status_code=404, detail="Conversación no encontrada.")
 
@@ -530,10 +452,6 @@ def turno_sanitario_texto(
         )
 
     idioma_paciente = conversaciones[id_conversacion]
-
-    # Esta función debe existir en agente.py
-    from agente import traducir_sanitario_a_paciente
-
     traduccion_paciente = traducir_sanitario_a_paciente(texto, idioma_paciente)
 
     return RespuestaMensaje(
@@ -544,7 +462,6 @@ def turno_sanitario_texto(
         texto_traducido=traduccion_paciente,
     )
 
-
 @app.post(
     "/api/conversaciones/{id_conversacion}/finalizar",
     response_model=FinalizarRespuesta,
@@ -553,31 +470,22 @@ def finalizar_conversacion(
     id_conversacion: str,
     current_user: UserDB = Depends(get_current_user),
 ):
-    """
-    Cierra la conversación y borra el idioma del paciente de la memoria en RAM.
-    """
     if id_conversacion in conversaciones:
         del conversaciones[id_conversacion]
         return FinalizarRespuesta(id_conversacion=id_conversacion, estado="cerrada")
     else:
         raise HTTPException(status_code=404, detail="Conversación no encontrada.")
 
-
 # ----------------------------------------------------------------------
 # CLIENTE PERPLEXITY (OpenAI-compatible) PARA DOCUMENTOS
 # ----------------------------------------------------------------------
-
 
 perplexity_client = OpenAI(
     api_key=os.environ["PERPLEXITY_API_KEY"],
     base_url="https://api.perplexity.ai",
 )
 
-
 def llamar_agente_documentos(prompt: str) -> str:
-    """
-    Llama a Perplexity con el prompt y devuelve solo el texto (para documentos).
-    """
     response = perplexity_client.chat.completions.create(
         model="sonar-pro",
         messages=[
@@ -590,21 +498,13 @@ def llamar_agente_documentos(prompt: str) -> str:
     )
     return response.choices[0].message.content
 
-
 # ----------------------------------------------------------------------
 # FUNCIÓN DE NEGOCIO: traducir_documento
 # ----------------------------------------------------------------------
 
-
 def traducir_documento(
     texto_documento: str, idioma_paciente_fijo: Optional[str], origen: str
 ) -> str:
-    """
-    Traduce documentos (consentimientos, informes, etc.).
-    origen: "paciente" o "sanitario"
-    - Si origen == "paciente": traduce SIEMPRE al ESPAÑOL.
-    - Si origen == "sanitario": traduce SIEMPRE al idioma fijo del paciente.
-    """
     if origen not in ["paciente", "sanitario"]:
         raise ValueError("El parámetro 'origen' debe ser 'paciente' o 'sanitario'.")
 
@@ -638,11 +538,9 @@ DOCUMENTO DEL HOSPITAL:
 
     return llamar_agente_documentos(prompt)
 
-
 # ----------------------------------------------------------------------
 # FUNCIÓN: extraer_texto_desde_archivo
 # ----------------------------------------------------------------------
-
 
 def extraer_texto_desde_archivo(contenido_bytes: bytes, content_type: str) -> str:
     if content_type == "text/plain":
@@ -664,7 +562,6 @@ def extraer_texto_desde_archivo(contenido_bytes: bytes, content_type: str) -> st
         parrafos = [p.text for p in doc.paragraphs]
         return "\n".join(parrafos)
 
-    # Imágenes (fotos de documentos)
     if content_type in ["image/jpeg", "image/png"]:
         image = Image.open(BytesIO(contenido_bytes))
         texto = pytesseract.image_to_string(image)
@@ -674,11 +571,9 @@ def extraer_texto_desde_archivo(contenido_bytes: bytes, content_type: str) -> st
         f"Tipo de archivo no soportado para extracción de texto: {content_type}"
     )
 
-
 # ----------------------------------------------------------------------
 # ENDPOINT: /api/documentos/traducir
 # ----------------------------------------------------------------------
-
 
 @app.post("/api/documentos/traducir")
 async def traducir_documento_endpoint(
@@ -690,11 +585,11 @@ async def traducir_documento_endpoint(
     print("ID_CONVERSACION RECIBIDO:", id_conversacion)
 
     tipos_permitidos = {
-        "text/plain",  # .txt
-        "application/pdf",  # .pdf
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
-        "image/jpeg",  # fotos .jpg
-        "image/png",  # fotos .png
+        "text/plain",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image/jpeg",
+        "image/png",
     }
     if archivo.content_type not in tipos_permitidos:
         raise HTTPException(
@@ -714,7 +609,6 @@ async def traducir_documento_endpoint(
             detail=f"No se ha podido extraer texto del archivo: {e}",
         )
 
-    # Resolver idioma_paciente_fijo si es sanitario
     idioma_paciente_fijo: Optional[str] = None
 
     if origen == "sanitario":
@@ -750,11 +644,113 @@ async def traducir_documento_endpoint(
         "texto_traducido": texto_traducido,
     }
 
+# ----------------------------------------------------------------------
+# ENDPOINT AUDIO: /api/audio/transcribir (Whisper)
+# ----------------------------------------------------------------------
+
+@app.post("/api/audio/transcribir", response_model=RespuestaMensaje)
+async def transcribir_audio(
+    archivo_audio: UploadFile = File(...),
+    rol: str = "paciente",
+    id_conversacion: Optional[str] = None,
+    current_user: UserDB = Depends(get_current_user),
+):
+    """
+    Recibe audio, lo transcribe con Whisper (OpenAI) y reutiliza la lógica de conversación.
+    """
+    if rol not in ["paciente", "sanitario"]:
+        raise HTTPException(status_code=400, detail="Rol inválido.")
+
+    # Leemos el contenido del archivo en memoria
+    audio_bytes = await archivo_audio.read()
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="El archivo de audio está vacío.")
+
+    # Guardamos en un archivo temporal para pasarlo a la API de OpenAI
+    # (la librería espera un archivo tipo file-like)
+    import tempfile
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        with open(tmp_path, "rb") as f:
+            transcripcion = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="text",
+            )
+
+        texto_transcrito = transcripcion  # ya es un string en response_format="text"
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error transcribiendo audio: {e}",
+        )
+    finally:
+        try:
+            if "tmp_path" in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+    texto_transcrito = (texto_transcrito or "").strip()
+    if not texto_transcrito:
+        raise HTTPException(
+            status_code=500,
+            detail="No se ha obtenido texto de la transcripción.",
+        )
+
+    # A partir de aquí, reutilizamos la lógica de texto
+    if rol == "paciente":
+        if not id_conversacion:
+            idioma_paciente = detectar_idioma_paciente(texto_transcrito)
+            traduccion_es = traducir_paciente_a_espanol(texto_transcrito, idioma_paciente)
+            id_conv = str(uuid.uuid4())
+            conversaciones[id_conv] = idioma_paciente
+
+            return RespuestaMensaje(
+                id_conversacion=id_conv,
+                rol="paciente",
+                idioma_paciente=idioma_paciente,
+                texto_original=texto_transcrito,
+                texto_traducido=traduccion_es,
+            )
+        else:
+            if id_conversacion not in conversaciones:
+                raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+            idioma_paciente = conversaciones[id_conversacion]
+            traduccion_es = traducir_paciente_a_espanol(texto_transcrito, idioma_paciente)
+            return RespuestaMensaje(
+                id_conversacion=id_conversacion,
+                rol="paciente",
+                idioma_paciente=idioma_paciente,
+                texto_original=texto_transcrito,
+                texto_traducido=traduccion_es,
+            )
+
+    # rol == sanitario
+    if not id_conversacion or id_conversacion not in conversaciones:
+        raise HTTPException(
+            status_code=400,
+            detail="Para rol='sanitario' es obligatorio indicar una conversación válida.",
+        )
+    idioma_paciente = conversaciones[id_conversacion]
+    traduccion_paciente = traducir_sanitario_a_paciente(texto_transcrito, idioma_paciente)
+    return RespuestaMensaje(
+        id_conversacion=id_conversacion,
+        rol="sanitario",
+        idioma_paciente=idioma_paciente,
+        texto_original=texto_transcrito,
+        texto_traducido=traduccion_paciente,
+    )
 
 # ----------------------------------------------------------------------
 # ENDPOINT TEMPORAL: crear primer usuario sin auth (SOLO DESARROLLO)
 # ----------------------------------------------------------------------
-
 
 @app.post("/dev/create-initial-user", response_model=UserRead)
 def create_initial_user_dev(
