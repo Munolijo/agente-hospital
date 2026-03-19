@@ -1,6 +1,9 @@
 import os
+import re
 from uuid import uuid4
 from openai import OpenAI
+from deep_translator import GoogleTranslator  # traductor clásico
+
 
 API_KEY = os.environ["PERPLEXITY_API_KEY"]
 
@@ -8,6 +11,23 @@ client = OpenAI(
     api_key=API_KEY,
     base_url="https://api.perplexity.ai",
 )
+
+# --- Helper para limpiar citas tipo [1][2] al final de la frase ---
+
+
+def limpiar_citas(texto: str) -> str:
+    """
+    Elimina secuencias de corchetes numéricos al final del texto.
+    Ej: "¿En qué le puedo ayudar?[1][2]" -> "¿En qué le puedo ayudar?"
+    """
+    if not texto:
+        return texto
+    texto_sin_citas = re.sub(r'(?:\[\d+\]\s*)+$', '', texto).strip()
+    return texto_sin_citas
+
+
+# ---------------------------------------------------------------
+# Cliente modelo (para paciente y documentos)
 
 
 def llamar_agente(prompt: str) -> str:
@@ -36,7 +56,11 @@ def llamar_agente(prompt: str) -> str:
             },
         ],
     )
-    return respuesta.choices[0].message.content.strip()
+    return (respuesta.choices[0].message.content or "").strip()
+
+
+# ---------------------------------------------------------------
+# DETECCIÓN Y PACIENTE -> ESPAÑOL
 
 
 def detectar_idioma_paciente(texto_paciente: str) -> str:
@@ -71,28 +95,95 @@ def traducir_paciente_a_espanol(texto_paciente: str, idioma_paciente: str) -> st
         f"Texto del paciente (idioma detectado: {idioma_paciente}):\n{texto_paciente}\n"
     )
     traduccion = llamar_agente(prompt)
+    traduccion = limpiar_citas(traduccion)
     return traduccion.strip()
+
+
+# ---------------------------------------------------------------
+# MAPEO IDIOMA PACIENTE (en español) -> código GoogleTranslator
+
+
+def idioma_paciente_a_codigo(idioma_paciente: str) -> str | None:
+    """
+    Mapea el nombre del idioma en español a un código de idioma para GoogleTranslator.
+    Devuelve None si no lo reconoce.
+    """
+    if not idioma_paciente:
+        return None
+
+    i = idioma_paciente.strip().lower()
+
+    if "español" in i or "castellano" in i:
+        return "es"
+    if "ingl" in i:
+        return "en"
+    if "fran" in i:
+        return "fr"
+    if "portu" in i:
+        return "pt"
+    if "alem" in i:
+        return "de"
+    if "ital" in i:
+        return "it"
+    if "árab" in i or "arab" in i:
+        return "ar"
+    if "chino" in i or "mandar" in i:
+        return "zh-cn"
+    if "rum" in i:
+        return "ro"
+    if "ruso" in i:
+        return "ru"
+    if "polac" in i:
+        return "pl"
+    if "neerland" in i or "holand" in i:
+        return "nl"
+    if "turc" in i:
+        return "tr"
+
+    return None
+
+
+# ---------------------------------------------------------------
+# TRADUCTOR CLÁSICO PARA EL SANITARIO (SIN MODELO)
+
+
+def traducir_con_traductor_clasico(texto: str, idioma_paciente: str) -> str:
+    """
+    Traduce desde español al idioma del paciente usando deep_translator (Google).
+    Si no reconoce el idioma o falla, lanza excepción.
+    """
+    codigo_destino = idioma_paciente_a_codigo(idioma_paciente)
+    if not codigo_destino:
+        raise ValueError(f"No se reconoce el idioma del paciente: {idioma_paciente!r}")
+
+    traductor = GoogleTranslator(source="es", target=codigo_destino)
+    resultado = traductor.translate(texto or "")
+    return (resultado or "").strip()
+
+
+# ---------------------------------------------------------------
+# SANITARIO -> PACIENTE
 
 
 def traducir_sanitario_a_paciente(texto_sanitario: str, idioma_paciente: str) -> str:
     """
-    Traduce del español al idioma del paciente.
-    Si el texto es incoherente o no se entiende, responde solo con algo breve en el idioma del paciente.
+    Traduce del español al idioma del paciente usando SOLO deep_translator.
+    Si falla, devuelve un mensaje de error controlado en español.
     """
-    prompt = (
-        "Eres un traductor profesional en un hospital.\n"
-        "Recibes frases habladas por personal SANITARIO en ESPAÑOL "
-        "y las traduces al idioma del PACIENTE.\n"
-        "TU ÚNICA SALIDA debe ser la traducción en el idioma del paciente, "
-        "sin explicaciones, sin comentarios, sin notas ni advertencias.\n"
-        "No menciones que eres un modelo de IA ni añadas frases de contexto.\n"
-        "Si el texto del sanitario es incoherente o no se entiende, responde únicamente con "
-        "una frase muy corta en el idioma del paciente equivalente a '(no se entiende bien)'.\n\n"
-        f"Idioma del paciente (en español, por ejemplo 'inglés', 'francés'): {idioma_paciente}\n\n"
-        f"Texto del sanitario (en ESPAÑOL):\n{texto_sanitario}\n"
-    )
-    traduccion = llamar_agente(prompt)
-    return traduccion.strip()
+    texto_sanitario = (texto_sanitario or "").strip()
+    if not texto_sanitario:
+        return ""
+
+    try:
+        traduccion = traducir_con_traductor_clasico(texto_sanitario, idioma_paciente)
+        return traduccion
+    except Exception:
+        # No usamos el modelo aquí para evitar charlas; devolvemos algo corto.
+        return "No se ha podido traducir automáticamente este mensaje al idioma del paciente."
+
+
+# ---------------------------------------------------------------
+# DOCUMENTOS (SEGUIMOS CON EL MODELO)
 
 
 def traducir_documento_generico(
@@ -109,8 +200,10 @@ Eres un agente de traducción en un hospital.
 TU ÚNICA TAREA es traducir el texto, sin explicaciones adicionales,
 sin comentarios legales, sin valoraciones, sin resúmenes y sin añadir información nueva.
 
+
 Traduce el siguiente DOCUMENTO entregado por el PACIENTE al ESPAÑOL.
 Devuelve únicamente la traducción, sin ningún texto extra, sin frases introductorias.
+
 
 DOCUMENTO DEL PACIENTE:
 {texto_documento}
@@ -121,16 +214,23 @@ Eres un agente de traducción en un hospital.
 TU ÚNICA TAREA es traducir el texto, sin explicaciones adicionales,
 sin comentarios legales, sin valoraciones, sin resúmenes y sin añadir información nueva.
 
+
 El siguiente texto es un DOCUMENTO del HOSPITAL para el PACIENTE, escrito en ESPAÑOL.
 Traduce TODO el contenido al idioma del paciente: {idioma_destino}.
 Devuelve únicamente la traducción, sin ningún texto extra, sin frases introductorias.
+
 
 DOCUMENTO DEL HOSPITAL:
 {texto_documento}
 """
 
     traduccion = llamar_agente(prompt)
+    traduccion = limpiar_citas(traduccion)
     return traduccion.strip()
+
+
+# ---------------------------------------------------------------
+# INICIO DE CONVERSACIÓN
 
 
 def iniciar_conversacion(texto_original: str) -> dict:

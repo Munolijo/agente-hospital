@@ -1,8 +1,7 @@
 // src/api/backend.ts
 
-// Usamos variable de entorno en producción y localhost en desarrollo
-const BASE_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:8000";
+// Forzamos directamente la URL de Render
+const BASE_URL = "https://agente-hospital.onrender.com";
 
 // ---------------------------------------------------------
 // Gestión de token (simple con localStorage)
@@ -69,12 +68,18 @@ export interface LoginResponse {
   token_type: string;
 }
 
-export async function login(username: string, password: string): Promise<void> {
+export async function login(
+  username: string,
+  password: string
+): Promise<LoginResponse> {
   const body = new URLSearchParams();
   body.append("username", username);
   body.append("password", password);
 
-  const res = await fetch(`${BASE_URL}/auth/login`, {
+  const url = `${BASE_URL}/auth/login`;
+  console.log("Login URL:", url);
+
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -84,125 +89,9 @@ export async function login(username: string, password: string): Promise<void> {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Login incorrecto: ${text}`);
+    throw new Error(text || "Usuario o contraseña incorrectos.");
   }
 
   const data: LoginResponse = await res.json();
-  setToken(data.access_token);
-}
-
-export interface UserMe {
-  id: number;
-  username: string;
-  hospital_id: string;
-  role: string;
-  activo: boolean;
-}
-
-export async function getCurrentUser(): Promise<UserMe> {
-  return apiFetch<UserMe>("/auth/me", { method: "GET" }, true);
-}
-
-// ---------------------------------------------------------
-// Medicamentos
-// ---------------------------------------------------------
-
-export interface MedicamentoEntrada {
-  nombre_comercial: string;
-}
-
-export interface MedicamentoSalida {
-  nombre_comercial: string;
-  principio_activo: string;
-}
-
-/**
- * Resuelve el principio activo de un medicamento.
- * Requiere que el usuario esté logado (usa Authorization: Bearer token).
- */
-export async function resolverMedicamento(
-  nombreComercial: string
-): Promise<MedicamentoSalida> {
-  return apiFetch<MedicamentoSalida>(
-    "/api/medicamentos/resolver",
-    {
-      method: "POST",
-      body: JSON.stringify({ nombre_comercial: nombreComercial }),
-    },
-    true
-  );
-}
-
-// ---------------------------------------------------------
-// Conversaciones agente
-// ---------------------------------------------------------
-
-export interface RespuestaMensaje {
-  id_conversacion: string;
-  rol: string;
-  idioma_paciente: string;
-  texto_original: string;
-  texto_traducido: string;
-}
-
-export async function iniciarConversacionPaciente(
-  textoOriginal: string
-): Promise<RespuestaMensaje> {
-  return apiFetch<RespuestaMensaje>(
-    "/api/conversaciones/paciente/texto",
-    {
-      method: "POST",
-      body: JSON.stringify({ texto_original: textoOriginal }),
-    },
-    true
-  );
-}
-
-export async function turnoPaciente(
-  idConversacion: string,
-  textoOriginal: string
-): Promise<RespuestaMensaje> {
-  return apiFetch<RespuestaMensaje>(
-    `/api/conversaciones/${encodeURIComponent(
-      idConversacion
-    )}/paciente/texto`,
-    {
-      method: "POST",
-      body: JSON.stringify({ texto_original: textoOriginal }),
-    },
-    true
-  );
-}
-
-export async function turnoSanitario(
-  idConversacion: string,
-  textoOriginal: string
-): Promise<RespuestaMensaje> {
-  return apiFetch<RespuestaMensaje>(
-    `/api/conversaciones/${encodeURIComponent(
-      idConversacion
-    )}/sanitario/texto`,
-    {
-      method: "POST",
-      body: JSON.stringify({ texto_original: textoOriginal }),
-    },
-    true
-  );
-}
-
-export interface FinalizarRespuesta {
-  id_conversacion: string;
-  estado: string;
-}
-
-export async function finalizarConversacion(
-  idConversacion: string
-): Promise<FinalizarRespuesta> {
-  return apiFetch<FinalizarRespuesta>(
-    `/api/conversaciones/${encodeURIComponent(idConversacion)}/finalizar`,
-    {
-      method: "POST",
-    },
-    true
-  );
+  return data;
 }
