@@ -73,7 +73,7 @@ def detectar_idioma_paciente(texto_paciente: str) -> str:
         "El siguiente texto lo ha dicho un paciente en un entorno hospitalario.\n"
         "Tu tarea ÚNICA es detectar en qué idioma está escrito el texto.\n"
         "Responde solo con el nombre del idioma en español, una sola palabra si es posible "
-        '(ejemplos: "inglés", "francés", "árabe", "ruso", "portugués", "chino").\n"
+        "(ejemplos: 'inglés', 'francés', 'árabe', 'ruso', 'portugués', 'chino').\n"
         "No añadas explicaciones, frases completas, disculpas ni comentarios.\n\n"
         f"Texto del paciente:\n{texto_paciente}\n"
     )
