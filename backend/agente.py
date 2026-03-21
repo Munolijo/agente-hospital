@@ -4,6 +4,7 @@ from uuid import uuid4
 from openai import OpenAI
 from deep_translator import GoogleTranslator  # traductor clásico
 
+
 API_KEY = os.environ["PERPLEXITY_API_KEY"]
 
 client = OpenAI(
@@ -12,6 +13,7 @@ client = OpenAI(
 )
 
 # --- Helper para limpiar citas tipo [1][2] al final de la frase ---
+
 
 def limpiar_citas(texto: str) -> str:
     """
@@ -23,8 +25,10 @@ def limpiar_citas(texto: str) -> str:
     texto_sin_citas = re.sub(r'(?:\[\d+\]\s*)+$', '', texto).strip()
     return texto_sin_citas
 
+
 # ---------------------------------------------------------------
-# Cliente modelo (para paciente y documentos)
+# Cliente modelo (para PACIENTE y DOCUMENTOS — se mantiene igual)
+
 
 def llamar_agente(prompt: str) -> str:
     """
@@ -54,8 +58,10 @@ def llamar_agente(prompt: str) -> str:
     )
     return (respuesta.choices[0].message.content or "").strip()
 
+
 # ---------------------------------------------------------------
-# DETECCIÓN Y PACIENTE -> ESPAÑOL
+# DETECCIÓN Y PACIENTE -> ESPAÑOL (igual que antes)
+
 
 def detectar_idioma_paciente(texto_paciente: str) -> str:
     """
@@ -71,6 +77,7 @@ def detectar_idioma_paciente(texto_paciente: str) -> str:
     )
     idioma = llamar_agente(prompt)
     return idioma.strip()
+
 
 def traducir_paciente_a_espanol(texto_paciente: str, idioma_paciente: str) -> str:
     """
@@ -91,8 +98,10 @@ def traducir_paciente_a_espanol(texto_paciente: str, idioma_paciente: str) -> st
     traduccion = limpiar_citas(traduccion)
     return traduccion.strip()
 
+
 # ---------------------------------------------------------------
 # MAPEO IDIOMA PACIENTE (en español) -> código GoogleTranslator
+
 
 def idioma_paciente_a_codigo(idioma_paciente: str) -> str | None:
     """
@@ -133,13 +142,14 @@ def idioma_paciente_a_codigo(idioma_paciente: str) -> str | None:
 
     return None
 
+
 # ---------------------------------------------------------------
-# TRADUCTOR CLÁSICO PARA EL SANITARIO (SIN MODELO)
+# TRADUCTOR CLÁSICO PARA EL SANITARIO (deep_translator)
+
 
 def traducir_con_traductor_clasico(texto: str, idioma_paciente: str) -> str:
     """
     Traduce desde español al idioma del paciente usando deep_translator (Google).
-    Si no reconoce el idioma o falla, lanza excepción.
     Detecta el caso en que no se produce traducción (devuelve algo casi igual al original).
     """
     codigo_destino = idioma_paciente_a_codigo(idioma_paciente)
@@ -147,7 +157,7 @@ def traducir_con_traductor_clasico(texto: str, idioma_paciente: str) -> str:
         raise ValueError(f"No se reconoce el idioma del paciente: {idioma_paciente!r}")
 
     texto_orig = (texto or "").strip()
-    traductor = GoogleTranslator(source="es", target=codigo_destino)
+    traductor = GoogleTranslator(source="es", target=codigo_destino)  # [web:2238][web:2240]
     resultado = (traductor.translate(texto_orig) or "").strip()
 
     # Heurística simple: si resultado es casi igual al original, lo consideramos "no traducido".
@@ -155,20 +165,24 @@ def traducir_con_traductor_clasico(texto: str, idioma_paciente: str) -> str:
     def normalizar(s: str) -> str:
         s = s.lower()
         reemplazos = {
-            "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u",
-            "ü": "u", "ñ": "n",
+            "á": "a",
+            "é": "e",
+            "í": "i",
+            "ó": "o",
+            "ú": "u",
+            "ü": "u",
+            "ñ": "n",
         }
         for k, v in reemplazos.items():
             s = s.replace(k, v)
         # quitamos signos de puntuación básicos
-        for ch in [".", ",", ";", ":", "¿", "?", "¡", "!", "\"", "'"]:
+        for ch in [".", ",", ";", ":", "¿", "?", "¡", "!", '"', "'"]:
             s = s.replace(ch, "")
         return s.strip()
 
     norm_orig = normalizar(texto_orig)
     norm_res = normalizar(resultado)
 
-    # Si son exactamente iguales o muy parecidos, lo tratamos como no traducido
     if norm_orig == norm_res:
         print(
             "DEBUG_DEEP_TRANSLATOR SIN TRADUCCION ->",
@@ -178,19 +192,20 @@ def traducir_con_traductor_clasico(texto: str, idioma_paciente: str) -> str:
             "codigo_destino:", repr(codigo_destino),
             flush=True,
         )
-        # De momento devolvemos tal cual; más adelante aquí podríamos
-        # reintentar con el modelo o devolver un mensaje corto.
+        # De momento devolvemos tal cual.
         return resultado
 
     return resultado
 
+
 # ---------------------------------------------------------------
-# SANITARIO -> PACIENTE
+# SANITARIO -> PACIENTE (VERSIÓN ENTREGA: SOLO deep_translator)
+
 
 def traducir_sanitario_a_paciente(texto_sanitario: str, idioma_paciente: str) -> str:
     """
-    Traduce del español al idioma del paciente usando el modelo de Perplexity.
-    Si el texto es incoherente o no se entiende, devuelve algo muy breve en el idioma del paciente.
+    Traduce del español al idioma del paciente usando deep_translator.
+    Versión entrega: no usa el modelo, para máxima estabilidad.
     """
     texto_sanitario = (texto_sanitario or "").strip()
     if not texto_sanitario:
@@ -204,40 +219,24 @@ def traducir_sanitario_a_paciente(texto_sanitario: str, idioma_paciente: str) ->
         flush=True,
     )
 
-    prompt = (
-        "Eres un traductor profesional en un hospital.\n"
-        "Recibes frases habladas por personal SANITARIO en ESPAÑOL "
-        "y las traduces al idioma del PACIENTE.\n"
-        "TU ÚNICA SALIDA debe ser la traducción en el idioma del paciente, "
-        "sin explicaciones, sin comentarios, sin notas ni advertencias.\n"
-        "No menciones que eres un modelo de IA ni añadas frases de contexto.\n"
-        "Si el texto del sanitario es incoherente o no se entiende, responde únicamente con "
-        "una frase muy corta en el idioma del paciente equivalente a '(no se entiende bien)'.\n\n"
-        f"Idioma del paciente (en español, por ejemplo 'inglés', 'francés'): {idioma_paciente}\n\n"
-        f"Texto del sanitario (en ESPAÑOL):\n{texto_sanitario}\n"
+    try:
+        resultado = traducir_con_traductor_clasico(texto_sanitario, idioma_paciente)
+    except Exception:
+        return "No se ha podido traducir automáticamente este mensaje al idioma del paciente."
+
+    # DEBUG: ver qué devuelve deep_translator
+    print(
+        "DEBUG_SANITARIO_A_PACIENTE_RESPUESTA ->",
+        repr(resultado[:200]),
+        flush=True,
     )
 
-    try:
-        traduccion = llamar_agente(prompt)
-        traduccion = limpiar_citas(traduccion)
+    return resultado.strip()
 
-        # DEBUG: ver qué devuelve el modelo
-        print(
-            "DEBUG_SANITARIO_A_PACIENTE_RESPUESTA ->",
-            repr(traduccion[:200]),
-            flush=True,
-        )
-
-        return traduccion.strip()
-    except Exception:
-        # Si el modelo falla, usamos el traductor clásico como respaldo
-        try:
-            return traducir_con_traductor_clasico(texto_sanitario, idioma_paciente)
-        except Exception:
-            return "No se ha podido traducir automáticamente este mensaje al idioma del paciente."
 
 # ---------------------------------------------------------------
 # DOCUMENTOS (SEGUIMOS CON EL MODELO)
+
 
 def traducir_documento_generico(
     texto_documento: str, idioma_destino: str, origen: str
@@ -277,8 +276,10 @@ DOCUMENTO DEL HOSPITAL:
     traduccion = limpiar_citas(traduccion)
     return traduccion.strip()
 
+
 # ---------------------------------------------------------------
 # INICIO DE CONVERSACIÓN
+
 
 def iniciar_conversacion(texto_original: str) -> dict:
     """
