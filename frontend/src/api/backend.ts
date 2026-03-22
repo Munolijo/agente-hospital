@@ -20,23 +20,27 @@ export function clearToken() {
 }
 
 // ---------------------------------------------------------
-// Helper genérico para peticiones al backend
+// Helper genérico para peticiones al backend (opcional)
 // ---------------------------------------------------------
 
-async function apiFetch<T>(
+type SimpleHeaders = Record<string, string>;
+
+export async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
   requireAuth: boolean = true
 ): Promise<T> {
   const token = getToken();
 
-  const headers: HeadersInit = {
-    ...(options.headers || {}),
+  const headers: SimpleHeaders = {
+    ...(options.headers as SimpleHeaders | undefined),
   };
 
   // Solo ponemos Content-Type JSON si no es FormData
   if (!(options.body instanceof FormData)) {
-    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    if (!headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
   }
 
   if (requireAuth) {
