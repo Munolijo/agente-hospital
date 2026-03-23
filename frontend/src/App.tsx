@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LoginPage } from "./LoginPage";
 import { API_BASE_URL } from "./config";
 
@@ -11,6 +11,48 @@ interface MensajeUI {
   textoTraducido: string;
 }
 
+// --- Helper TTS externo (Azure) ---
+
+async function reproducirTtsExterno(
+  texto: string,
+  idiomaPaciente: string | null,
+  token: string
+) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/tts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        texto,
+        idioma_paciente: idiomaPaciente,
+      }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail ?? "Error en TTS externo");
+    }
+
+    const data = await res.json();
+    const audioB64 = data.audio_base64 as string | undefined;
+    if (!audioB64) {
+      throw new Error("Respuesta TTS sin audio_base64");
+    }
+
+    const audioBytes = Uint8Array.from(atob(audioB64), c => c.charCodeAt(0));
+    const blob = new Blob([audioBytes], { type: "audio/mpeg" });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.play();
+  } catch (e) {
+    console.error("ERROR_TTS_EXTERNO ->", e);
+    throw e;
+  }
+}
+
 function ConversacionPage(props: { token: string; onLogout: () => void }) {
   const [rolActivo, setRolActivo] = useState<RolConversacion>("paciente");
   const [idConversacion, setIdConversacion] = useState<string | null>(null);
@@ -19,7 +61,7 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
   const [textoEntrada, setTextoEntrada] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Para documentos (no usamos la variable, solo el setter para limpiar el warning)
+  // Para documentos
   const [, setArchivo] = useState<File | null>(null);
   const [subiendoDoc, setSubiendoDoc] = useState(false);
 
@@ -27,6 +69,50 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
   const [grabando, setGrabando] = useState(false);
   const [enviandoAudio, setEnviandoAudio] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+
+  // Voces TTS (Web Speech)
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [ttsAviso, setTtsAviso] = useState<string | null>(null);
+
+  // ---- Carga de voces del navegador ----
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) {
+      setTtsAviso("Este navegador no soporta lectura en voz (Web Speech API).");
+      return;
+    }
+
+    const cargarVoces = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length > 0) {
+        setVoices(v);
+      }
+    };
+
+    cargarVoces();
+
+    window.speechSynthesis.onvoiceschanged = () => {
+      cargarVoces();
+    };
+  }, []);
+
+  const seleccionarVozPorIdioma = (langObjetivo: string): SpeechSynthesisVoice | null => {
+    if (!voices.length) return null;
+
+    const lowerTarget = langObjetivo.toLowerCase();
+
+    // 1. Coincidencia exacta de lang (ej: "ar-SA")
+    let voz = voices.find(v => v.lang.toLowerCase() === lowerTarget);
+    if (voz) return voz;
+
+    // 2. Coincidencia por prefijo (ej: "ar-" o "ar")
+    const prefix = lowerTarget.split("-")[0];
+    voz = voices.find(v => v.lang.toLowerCase().startsWith(prefix));
+    if (voz) return voz;
+
+    // 3. Sin coincidencia: devolvemos null y que el código superior decida
+    return null;
+  };
 
   // ---- Helpers de voz ----
 
@@ -42,6 +128,8 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
     if (i.includes("árab") || i.includes("arab")) return "ar-SA";
     if (i.includes("ital")) return "it-IT";
     if (i.includes("rum") || i.includes("ruma")) return "ro-RO";
+    if (i.includes("chino") || i.includes("mandarín")) return "zh-CN";
+    if (i.includes("fars") || i.includes("persa")) return "fa-IR";
 
     // por defecto, inglés
     return "en-US";
@@ -51,19 +139,45 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
     if (!("speechSynthesis" in window)) {
       return;
     }
+
+    setTtsAviso(null);
+
     const utter = new SpeechSynthesisUtterance(texto);
     utter.lang = lang;
+
+    const vozSeleccionada = seleccionarVozPorIdioma(lang);
+    if (vozSeleccionada) {
+      utter.voice = vozSeleccionada;
+    } else {
+      // No hay voz para ese idioma
+      setTtsAviso(
+        `No hay voz instalada para el idioma ${lang}. Se muestra el texto, pero no se puede leer en voz alta en este dispositivo.`
+      );
+    }
+
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utter);
   };
 
   const hablarParaSanitario = (texto: string) => {
-    // español para el sanitario
+    // español para el sanitario (Web Speech)
     hablarTexto(texto, "es-ES");
   };
 
-  const hablarParaPaciente = (texto: string) => {
+  const hablarParaPaciente = async (texto: string) => {
     const lang = mapearIdiomaPacienteALang(idiomaPaciente);
+
+    // Primero intentamos TTS externo (Azure) si hay idioma_paciente conocido
+    try {
+      if (idiomaPaciente) {
+        await reproducirTtsExterno(texto, idiomaPaciente, props.token);
+        return;
+      }
+    } catch {
+      // Si falla, seguimos con speechSynthesis
+    }
+
+    // Fallback al speechSynthesis del navegador
     hablarTexto(texto, lang);
   };
 
@@ -105,7 +219,7 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
 
       const res = await fetch(url, {
         method,
-        headers: {
+               headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${props.token}`,
         },
@@ -160,7 +274,7 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
     setError(null);
     try {
       await fetch(
-        `${API_BASE_URL}/api/conversaciones/${idConversacion}/finalizar`,
+        `${API_BASE_URL}/api/conversaciones/${id_conversacion}/finalizar`,
         {
           method: "POST",
           headers: {
@@ -290,45 +404,45 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
 
         const audioBlob = new Blob(chunks, { type: "audio/webm" });
 
-const formData = new FormData();
-formData.append("archivo_audio", audioBlob, "grabacion.webm");
+        const formData = new FormData();
+        formData.append("archivo_audio", audioBlob, "grabacion.webm");
 
-// Lógica de rol robusta:
-// - Si NO hay idConversacion => siempre paciente (primer turno)
-// - Si YA hay idConversacion y aún no hay ningún mensaje del sanitario => forzamos sanitario
-let rolAEnviar: RolConversacion = rolActivo;
+        // Lógica de rol robusta:
+        // - Si NO hay idConversacion => siempre paciente (primer turno)
+        // - Si YA hay idConversacion y aún no hay ningún mensaje del sanitario => forzamos sanitario
+        let rolAEnviar: RolConversacion = rolActivo;
 
-if (!idConversacion) {
-  rolAEnviar = "paciente";
-} else {
-  const haySanitario = mensajes.some(m => m.rol === "sanitario");
-  if (!haySanitario) {
-    rolAEnviar = "sanitario";
-  }
-}
+        if (!idConversacion) {
+          rolAEnviar = "paciente";
+        } else {
+          const haySanitario = mensajes.some(m => m.rol === "sanitario");
+          if (!haySanitario) {
+            rolAEnviar = "sanitario";
+          }
+        }
 
-console.log(
-  "DEBUG_FRONT_AUDIO -> rolActivo:",
-  rolActivo,
-  "rolAEnviar:",
-  rolAEnviar,
-  "idConversacion:",
-  idConversacion
-);
+        console.log(
+          "DEBUG_FRONT_AUDIO -> rolActivo:",
+          rolActivo,
+          "rolAEnviar:",
+          rolAEnviar,
+          "idConversacion:",
+          idConversacion
+        );
 
-formData.append("rol", rolAEnviar);
-if (idConversacion) {
-  formData.append("id_conversacion", idConversacion);
-}
+        formData.append("rol", rolAEnviar);
+        if (idConversacion) {
+          formData.append("id_conversacion", idConversacion);
+        }
 
-try {
-  const res = await fetch(`${API_BASE_URL}/api/audio/transcribir`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${props.token}`,
-    },
-    body: formData,
-  });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/audio/transcribir`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${props.token}`,
+            },
+            body: formData,
+          });
 
           if (!res.ok) {
             const data = await res.json().catch(() => null);
@@ -346,14 +460,14 @@ try {
 
           const nuevo: MensajeUI = {
             id: crypto.randomUUID(),
-            rol: rolActivo,
+            rol: rolAEnviar,
             textoOriginal: data.texto_original,
             textoTraducido: data.texto_traducido,
           };
           setMensajes(prev => [...prev, nuevo]);
 
           if (data.texto_traducido) {
-            if (rolActivo === "paciente") {
+            if (rolAEnviar === "paciente") {
               hablarParaSanitario(data.texto_traducido);
             } else {
               hablarParaPaciente(data.texto_traducido);
@@ -444,6 +558,12 @@ try {
 
       {error && (
         <div style={{ color: "red", fontSize: 14 }}>{error}</div>
+      )}
+
+      {ttsAviso && (
+        <div style={{ color: "#b36b00", fontSize: 13 }}>
+          {ttsAviso}
+        </div>
       )}
 
       {/* Cuadrado grande de conversación */}
