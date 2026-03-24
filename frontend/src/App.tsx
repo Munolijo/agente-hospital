@@ -273,15 +273,15 @@ function ConversacionPage(props: { token: string; onLogout: () => void }) {
     }
     setError(null);
     try {
-      await fetch(
-        `${API_BASE_URL}/api/conversaciones/${id_conversacion}/finalizar`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${props.token}`,
-          },
-        }
-      );
+await fetch(
+  `${API_BASE_URL}/api/conversaciones/${idConversacion}/finalizar`,
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${props.token}`,
+    },
+  }
+);
       // aunque falle, reseteamos UI
       setIdConversacion(null);
       setMensajes([]);
